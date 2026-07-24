@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>聽力更正遊戲製作工具</title>
+<style>
+  *{box-sizing:border-box} html,body{margin:0;padding:0}
+  body{font-family:"Segoe UI",Arial,"Noto Sans TC",sans-serif;background:#F3EFE9;color:#222;line-height:1.6}
+  .wrap{max-width:860px;margin:0 auto;padding:1rem 0.6rem}
+  button{font-family:inherit}
+  input,textarea,select{font-family:inherit}
+
+  @keyframes popIn{0%{transform:scale(.5);opacity:0}70%{transform:scale(1.15)}100%{transform:scale(1);opacity:1}}
+  @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-7px)}40%{transform:translateX(7px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}
+  @keyframes chipFlash{0%,100%{background:#FCEBEB}40%{background:#F7C1C1}}
+  .pop{animation:popIn .32s ease}
+  .shake{animation:shake .42s ease}
+  .chipFlash{animation:chipFlash .42s ease}
+
+  .card{background:#fff;border:0.5px solid #e5e5e5;border-radius:0 0 12px 12px}
+  .head{border-radius:12px 12px 0 0;padding:1rem 1.4rem;color:#fff;background:linear-gradient(135deg,#A32D2D,#7B1F1F)}
+  .head .eyebrow{font-size:11px;opacity:.65;margin-bottom:4px}
+  .head h1{font-size:19px;font-weight:700;margin:0}
+  .head .sub{font-size:12px;opacity:.7;margin-top:3px}
+
+  .grid2{display:grid;grid-template-columns:1fr 320px;gap:1.6rem;padding:1.4rem}
+  .fl{font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:5px}
+  .inp{padding:7px 10px;border:1.5px solid #ddd;border-radius:7px;font-size:13px;outline:none;width:100%}
+  textarea.inp{resize:vertical;line-height:1.7}
+  .hint{font-size:11px;color:#bbb;margin-top:4px}
+  .keylink{color:#185FA5;font-weight:600}
+
+  .aibox{background:#f8f8f6;border-radius:8px;padding:10px 12px;font-size:11px;color:#777;line-height:1.9;margin-top:10px}
+  .aibox strong{color:#666;display:block;margin-bottom:2px}
+  .rowhead{display:grid;grid-template-columns:1fr 1fr 20px;gap:5px;margin-bottom:6px}
+  .rowhead span{font-size:10px;color:#bbb;text-align:center}
+  .pairs{display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto}
+  .pairrow{display:grid;grid-template-columns:1fr 1fr 20px;gap:5px;align-items:center}
+  .rm{background:none;border:none;cursor:pointer;color:#ccc;font-size:18px;padding:0;line-height:1}
+  .addbtn{font-size:12px;color:#185FA5;background:none;border:none;cursor:pointer;font-weight:500}
+  .aiBtn{width:100%;margin-top:10px;padding:9px 0;background:#185FA5;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer}
+  .aiBtn[disabled]{background:#f0f0f0;color:#aaa;cursor:default}
+  .err{margin-top:8px;padding:8px 10px;background:#FEF2F2;border:1px solid #FCA5A5;border-radius:8px;font-size:12px;color:#B91C1C;display:none}
+  .genRow{text-align:center;margin-top:14px}
+  .genBtn{padding:12px 44px;background:#A32D2D;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 3px 14px rgba(163,45,45,.3)}
+
+  .gheader{background:#A32D2D;border-radius:10px 10px 0 0;padding:0.75rem 1.3rem;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  .gheader .eyebrow{font-size:11px;color:rgba(255,255,255,.65);margin-bottom:3px}
+  .gheader .gtitle{color:#fff;font-size:17px;font-weight:600}
+  .ghead-btns{display:flex;gap:8px;flex-wrap:wrap}
+  .ttsBtn{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.15);border:1.5px solid rgba(255,255,255,.7);color:#fff;border-radius:999px;padding:5px 13px;font-size:12px;font-weight:500;cursor:pointer}
+  .ttsBtn.on{background:#fff;color:#A32D2D}
+  .backBtn{background:rgba(255,255,255,.1);border:1.5px solid rgba(255,255,255,.5);color:#fff;border-radius:999px;padding:5px 11px;font-size:12px;cursor:pointer}
+
+  .gbody{padding:1.25rem 1.5rem;display:grid;grid-template-columns:1fr 165px;gap:1.5rem}
+  .article{font-size:15px;line-height:2.8;color:#222}
+  .wrongspan{display:inline-block;color:#1a1a1a;font-weight:500;cursor:pointer;border-bottom:2px dashed #aaa;padding:0 2px;border-radius:3px;vertical-align:middle}
+  .wrongspan.fixed{color:#2d7d0f;font-weight:700;cursor:default;border-bottom:none}
+  .bankhead{font-size:11px;font-weight:600;color:#888;letter-spacing:.06em;margin-bottom:10px;text-transform:uppercase}
+  .chip{background:#FCEBEB;color:#791F1F;border:1.5px solid #E24B4A;border-radius:999px;padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer;user-select:none;display:flex;align-items:center;gap:5px;white-space:nowrap;transition:all .12s}
+  .chip.sel{background:#E24B4A;color:#fff;transform:translateY(-2px)}
+  .chip.used{opacity:.22;pointer-events:none}
+  .chip .lt{font-size:11px;opacity:.5}
+  .tip{margin-top:14px;padding:10px 12px;background:#f5f5f3;border-radius:8px;font-size:11px;color:#777;line-height:1.8}
+  .status{text-align:center;padding:0.7rem;font-size:13px;color:#666;border-top:1px solid #f0f0f0}
+  .status.done{color:#2d7d0f;font-size:15px;font-weight:600}
+
+  @media (max-width:640px){ .grid2,.gbody{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const GKEY_LS='meow:gemini_key', GMODEL_LS='meow:gemini_model';
+
+/* ── Voice helper ─────────────────────────────────────────── */
+const MALE_PREF = [
+  'Google UK English Male','Microsoft David - English (United States)',
+  'Microsoft Guy Online (Natural) - English (United States)',
+  'Alex','Daniel','Fred','Google US English'
+];
+function pickVoice(voices){
+  for(const n of MALE_PREF){ const v=voices.find(v=>v.name===n); if(v) return v; }
+  return voices.find(v=>/male/i.test(v.name)&&v.lang.startsWith('en'))
+    || voices.find(v=>v.lang==='en-US')
+    || voices.find(v=>v.lang.startsWith('en'))
+    || null;
+}
+function makeTTS(text){
+  let playing=false, onChange=()=>{};
+  function toggle(){
+    if(!window.speechSynthesis) return;
+    if(playing){ speechSynthesis.cancel(); playing=false; onChange(playing); return; }
+    speechSynthesis.cancel();
+    const utt=new SpeechSynthesisUtterance(text);
+    utt.lang='en-US'; utt.rate=0.82; utt.pitch=0.75; utt.volume=1;
+    utt.onstart=()=>{ playing=true; onChange(playing); };
+    utt.onend=utt.onerror=()=>{ playing=false; onChange(playing); };
+    const go=()=>{ const v=pickVoice(speechSynthesis.getVoices()); if(v) utt.voice=v; speechSynthesis.speak(utt); };
+    const voices=speechSynthesis.getVoices();
+    if(voices.length>0) go();
+    else speechSynthesis.onvoiceschanged=()=>{ speechSynthesis.onvoiceschanged=null; go(); };
+  }
+  return { toggle, isPlaying:()=>playing, onChange:f=>{onChange=f;} };
+}
+
+/* ── Segment builder ──────────────────────────────────────── */
+function buildSegments(article, pairs){
+  const reps=[];
+  for(const p of pairs){
+    const c=(p.correct||'').trim(), w=(p.wrong||'').trim();
+    if(!c||!w) continue;
+    const idx=article.toLowerCase().indexOf(c.toLowerCase());
+    if(idx!==-1) reps.push({start:idx,end:idx+c.length,correct:c,wrong:w});
+  }
+  reps.sort((a,b)=>a.start-b.start);
+  const segs=[]; let last=0;
+  for(const r of reps){
+    if(r.start>last) segs.push({type:'text',content:article.slice(last,r.start)});
+    segs.push({type:'wrong',content:r.wrong,correct:r.correct,id:'w'+r.start});
+    last=r.end;
+  }
+  if(last<article.length) segs.push({type:'text',content:article.slice(last)});
+  return segs;
+}
+
+/* ── Gemini（AI 建議干擾字，用你自己的免費金鑰）──────────── */
+function getGeminiKey(){ const el=$('geminiKey'); return el?el.value.trim():''; }
+function getGeminiModel(){ const el=$('geminiModel'); return el&&el.value?el.value:'gemini-2.5-flash'; }
+async function geminiGenerate(text){
+  const key=getGeminiKey();
+  if(!key) throw new Error('尚未設定 Gemini 金鑰');
+  const res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+getGeminiModel()+':generateContent',{
+    method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},
+    body:JSON.stringify({contents:[{parts:[{text:text}]}],generationConfig:{temperature:0.6,maxOutputTokens:1024}})});
+  if(!res.ok){
+    let msg='API 錯誤 '+res.status;
+    try{ const e=await res.json(); if(e.error&&e.error.message) msg=e.error.message; }catch(_){}
+    if(res.status===429) msg='已達免費額度上限，請稍後再試或換 Flash-Lite 模型';
+    if(res.status===400||res.status===403) msg='金鑰無效或權限不足，請確認金鑰是否正確';
+    throw new Error(msg);
+  }
+  const d=await res.json();
+  const cand=d.candidates&&d.candidates[0];
+  const txt=cand&&cand.content&&cand.content.parts?cand.content.parts.map(p=>p.text||'').join(''):'';
+  if(!txt) throw new Error('沒有回傳內容');
+  return txt;
+}
+function parseJsonObject(text){
+  let t=text.replace(/```json|```/g,'').trim();
+  const s=t.indexOf('{'), e=t.lastIndexOf('}');
+  if(s>=0&&e>s) t=t.slice(s,e+1);
+  return JSON.parse(t);
+}
+
+/* ============ 狀態 ============ */
+let pairs=[{id:1,correct:'',wrong:''},{id:2,correct:'',wrong:''},{id:3,correct:'',wrong:''}];
+let nextId=4;
+let game=null; // {title,article,segments,pairs}
+
+/* ============ Setup 畫面 ============ */
+function renderSetup(){
+  const app=$('app');
+  app.innerHTML = `
+    <div class="head">
+      <div class="eyebrow">🎮 聽力更正遊戲製作工具</div>
+      <h1>自訂遊戲設定</h1>
+      <div class="sub">貼上文章 → 設定單字 → AI 建議干擾字 → 產生遊戲</div>
+    </div>
+    <div class="card grid2">
+      <div>
+        <label class="fl">遊戲標題（選填）</label>
+        <input class="inp" id="gTitle" placeholder="例：Alex Honnold: Free Solo Taipei 101" style="margin-bottom:14px" />
+        <label class="fl">貼上文章 <span style="font-weight:400;color:#aaa">（正確版本 — 即音檔唸的內容）</span></label>
+        <textarea class="inp" id="gArticle" placeholder="在這裡貼上完整文章..." rows="12"></textarea>
+        <div class="hint" id="wc"></div>
+
+        <label class="fl" style="margin-top:16px">AI 設定（Gemini 免費 API）</label>
+        <input class="inp" id="geminiKey" type="password" placeholder="貼上你的 Gemini API 金鑰（AIza...）" autocomplete="off" style="margin-bottom:6px" />
+        <select class="inp" id="geminiModel" style="margin-bottom:6px">
+          <option value="gemini-2.5-flash">Gemini 2.5 Flash（預設・品質佳）</option>
+          <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite（更快・免費額度高）</option>
+        </select>
+        <div class="hint">免費申請：到 <a class="keylink" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 登入 Google 帳號 → Create API key，貼上即可。金鑰只存在你自己這台裝置的瀏覽器，不會外傳。</div>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span style="font-size:12px;font-weight:600;color:#555">設定測驗單字</span>
+          <button class="addbtn" id="addPair">＋ 新增</button>
+        </div>
+        <div class="rowhead"><span>🔊 正確字（音檔）</span><span>📝 干擾字（文章顯示）</span><span></span></div>
+        <div class="pairs" id="pairsBox"></div>
+        <button class="aiBtn" id="suggestBtn">✨ AI 自動建議干擾字</button>
+        <div class="aibox">
+          <strong>使用步驟</strong>
+          ① 貼上正確版本文章（音檔內容）<br/>
+          ② 填入要測驗的正確單字<br/>
+          ③ 點 AI 按鈕自動建議干擾字<br/>
+          　（或手動填入干擾字）<br/>
+          ④ 確認後點「產生遊戲」
+        </div>
+        <div class="err" id="errBox"></div>
+      </div>
+    </div>
+    <div class="genRow"><button class="genBtn" id="goBtn">▶ 產生遊戲</button></div>
+  `;
+
+  try{
+    const sk=localStorage.getItem(GKEY_LS); if(sk) $('geminiKey').value=sk;
+    const sm=localStorage.getItem(GMODEL_LS); if(sm) $('geminiModel').value=sm;
+  }catch(e){}
+  $('geminiKey').addEventListener('change',()=>{ try{localStorage.setItem(GKEY_LS,getGeminiKey());}catch(e){} });
+  $('geminiModel').addEventListener('change',()=>{ try{localStorage.setItem(GMODEL_LS,getGeminiModel());}catch(e){} });
+
+  $('gArticle').addEventListener('input',()=>{
+    const n=$('gArticle').value.trim();
+    $('wc').textContent = n ? n.split(/\s+/).filter(Boolean).length+' 個字' : '';
+  });
+  $('addPair').addEventListener('click',()=>{ pairs.push({id:nextId++,correct:'',wrong:''}); renderPairs(); });
+  $('goBtn').addEventListener('click',go);
+  $('suggestBtn').addEventListener('click',suggestAI);
+  renderPairs();
+}
+
+function renderPairs(){
+  $('pairsBox').innerHTML = pairs.map(p=>`
+    <div class="pairrow" data-id="${p.id}">
+      <input class="inp pc" placeholder="正確單字" value="${(p.correct||'').replace(/"/g,'&quot;')}" />
+      <input class="inp pw" placeholder="干擾字" value="${(p.wrong||'').replace(/"/g,'&quot;')}" />
+      <button class="rm">×</button>
+    </div>`).join('');
+  $('pairsBox').querySelectorAll('.pairrow').forEach(row=>{
+    const id=+row.dataset.id;
+    row.querySelector('.pc').addEventListener('input',e=>{ const p=pairs.find(x=>x.id===id); if(p) p.correct=e.target.value; });
+    row.querySelector('.pw').addEventListener('input',e=>{ const p=pairs.find(x=>x.id===id); if(p) p.wrong=e.target.value; });
+    row.querySelector('.rm').addEventListener('click',()=>{ pairs=pairs.filter(x=>x.id!==id); renderPairs(); });
+  });
+}
+
+function showError(msg){ const e=$('errBox'); if(!msg){ e.style.display='none'; e.textContent=''; return; } e.style.display='block'; e.textContent='⚠️ '+msg; }
+
+async function suggestAI(){
+  const article=$('gArticle').value;
+  const corrects=pairs.map(p=>p.correct.trim()).filter(Boolean);
+  if(!corrects.length||!article.trim()){ showError('請先填入文章和至少一個正確單字'); return; }
+  if(!getGeminiKey()){ showError('請先在左側貼上 Gemini API 金鑰'); return; }
+  const btn=$('suggestBtn'); btn.disabled=true; btn.textContent='✨ AI 思考中…'; showError('');
+  try{
+    const prompt = `You are creating a listening comprehension exercise. Given an English article and target words, suggest ONE plausible but DIFFERENT synonym or alternative word/phrase for each target. The alternative must:
+- Sound natural in the same context
+- Use DIFFERENT vocabulary from the original
+- Keep the same part of speech (noun→noun, verb→verb, etc.)
+- For multi-word phrases, suggest a similar phrase
+
+Article:
+${article}
+
+Target words: ${corrects.join(', ')}
+
+Respond ONLY with a valid JSON object, no markdown, no explanation:
+{"word1":"distractor1","word2":"distractor2"}`;
+    const text = await geminiGenerate(prompt);
+    const obj = parseJsonObject(text);
+    pairs = pairs.map(pair=>{
+      const k=pair.correct.trim();
+      return obj[k] ? {...pair, wrong:obj[k]} : pair;
+    });
+    renderPairs();
+  }catch(e){ showError(e.message||'AI 建議失敗，請手動填入干擾字'); }
+  btn.disabled=false; btn.textContent='✨ AI 自動建議干擾字';
+}
+
+function go(){
+  const title=$('gTitle').value;
+  const article=$('gArticle').value;
+  const validPairs=pairs.filter(p=>p.correct.trim()&&p.wrong.trim());
+  if(!article.trim()){ showError('請填入文章'); return; }
+  if(!validPairs.length){ showError('請至少設定一組單字（正確字 + 干擾字）'); return; }
+  const segs=buildSegments(article,validPairs);
+  const notFound=validPairs.filter(p=>!segs.some(s=>s.type==='wrong'&&s.correct.toLowerCase()===p.correct.trim().toLowerCase()));
+  if(notFound.length){ showError('以下單字在文章中找不到：'+notFound.map(p=>p.correct).join('、')); return; }
+  showError('');
+  game={title,article,segments:segs,pairs:validPairs};
+  renderGame();
+}
+
+/* ============ Game 畫面 ============ */
+function renderGame(){
+  const app=$('app');
+  const tts=makeTTS(game.article);
+  let fixed={}, selIdx=null;
+
+  app.innerHTML = `
+    <div class="gheader">
+      <div><div class="eyebrow">聽力更正遊戲</div><div class="gtitle">${escapeHtml(game.title||'聽力遊戲')}</div></div>
+      <div class="ghead-btns">
+        <button class="ttsBtn" id="ttsBtn">▶ 播放全文</button>
+        <button class="backBtn" id="backBtn">← 重新設定</button>
+      </div>
+    </div>
+    <div class="card gbody">
+      <div class="article" id="articleBox"></div>
+      <div>
+        <div class="bankhead">Word Bank</div>
+        <div id="bankBox" style="display:flex;flex-direction:column;gap:8px"></div>
+        <div class="tip">① 播放音檔仔細聆聽<br/>② 找出文章中<br/>　與音檔不同的字<br/>③ 選正確字拖到<br/>　錯誤字上更正</div>
+      </div>
+    </div>
+    <div class="status" id="statusBox"></div>
+  `;
+
+  $('backBtn').addEventListener('click',()=>{ if(tts.isPlaying()) tts.toggle(); game=null; renderSetup(); });
+  $('ttsBtn').addEventListener('click',()=>tts.toggle());
+  tts.onChange(playing=>{
+    const b=$('ttsBtn');
+    b.classList.toggle('on',playing);
+    b.textContent = playing ? '⏸ 停止' : '▶ 播放全文';
+  });
+
+  function usedCorrects(){ return new Set(Object.values(fixed).map(v=>v.toLowerCase())); }
+
+  function tryFix(segId, correct){
+    if(selIdx===null) return;
+    const chip=game.pairs[selIdx];
+    if(!chip) return;
+    if(chip.correct.trim().toLowerCase()===correct.toLowerCase()){
+      fixed[segId]=chip.correct.trim();
+      selIdx=null;
+      renderArticle(); renderBank(); renderStatus();
+    } else {
+      const span=document.querySelector('[data-seg="'+segId+'"]');
+      const chipEl=document.querySelector('[data-chip="'+selIdx+'"]');
+      if(span){ span.classList.add('shake'); setTimeout(()=>span.classList.remove('shake'),450); }
+      if(chipEl){ chipEl.classList.add('chipFlash'); setTimeout(()=>chipEl.classList.remove('chipFlash'),450); }
+    }
+  }
+
+  function renderArticle(){
+    const box=$('articleBox');
+    box.innerHTML = game.segments.map(seg=>{
+      if(seg.type==='text') return `<span>${escapeHtml(seg.content)}</span>`;
+      const isFixed=!!fixed[seg.id];
+      return `<span class="wrongspan${isFixed?' fixed pop':''}" data-seg="${seg.id}" data-correct="${escapeHtml(seg.correct)}">${escapeHtml(isFixed?fixed[seg.id]:seg.content)}</span>`;
+    }).join('');
+    box.querySelectorAll('.wrongspan').forEach(el=>{
+      if(el.classList.contains('fixed')) return;
+      el.addEventListener('click',()=>tryFix(el.dataset.seg, el.dataset.correct));
+      el.addEventListener('dragover',e=>e.preventDefault());
+      el.addEventListener('drop',e=>{ e.preventDefault(); tryFix(el.dataset.seg, el.dataset.correct); });
+    });
+  }
+
+  function renderBank(){
+    const used=usedCorrects();
+    const box=$('bankBox');
+    const letters='abcdefghijklmnop';
+    box.innerHTML = game.pairs.map((p,i)=>{
+      const isUsed=used.has(p.correct.trim().toLowerCase());
+      const isSel=selIdx===i;
+      return `<div class="chip${isSel?' sel':''}${isUsed?' used':''}" data-chip="${i}" draggable="${isUsed?'false':'true'}"><span class="lt">${letters[i]||''}</span>${escapeHtml(p.correct.trim())}</div>`;
+    }).join('');
+    box.querySelectorAll('.chip').forEach(el=>{
+      const i=+el.dataset.chip;
+      if(el.classList.contains('used')) return;
+      el.addEventListener('click',()=>{ selIdx = selIdx===i ? null : i; renderBank(); });
+      el.addEventListener('dragstart',e=>{ selIdx=i; e.dataTransfer.effectAllowed='move'; renderBank(); });
+    });
+  }
+
+  function renderStatus(){
+    const score=Object.keys(fixed).length, total=game.pairs.length;
+    const box=$('statusBox');
+    if(score===total){ box.className='status done'; box.textContent='全部更正完畢！聽力超強！🎉'; }
+    else { box.className='status'; box.innerHTML='已更正 <strong>'+score+' / '+total+'</strong> 個錯誤'; }
+  }
+
+  renderArticle(); renderBank(); renderStatus();
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+renderSetup();
+</script>
+</body>
+</html>
