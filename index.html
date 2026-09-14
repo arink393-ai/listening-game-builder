@@ -63,6 +63,16 @@
   .chip.used{opacity:.22;pointer-events:none}
   .chip .lt{font-size:11px;opacity:.5}
   .tip{margin-top:14px;padding:10px 12px;background:#f5f5f3;border-radius:8px;font-size:11px;color:#777;line-height:1.8}
+  .ttsNote{text-align:center;padding:0.4rem 0.7rem;font-size:11px;color:#999;min-height:1.2em}
+  .ttsBox{margin-top:10px;padding:10px 12px;background:#f8f8f6;border-radius:8px}
+  .ttsBox summary{font-size:12px;font-weight:600;color:#555;cursor:pointer;list-style:none}
+  .ttsBox summary::-webkit-details-marker{display:none}
+  .ttsBox summary::before{content:'▸ ';color:#aaa}
+  .ttsBox[open] summary::before{content:'▾ '}
+  .ttsBox .row{display:grid;grid-template-columns:auto 1fr;gap:7px;align-items:center;margin-top:8px}
+  .ttsBox label{font-size:11px;color:#777;white-space:nowrap}
+  .ttsBox .inp{font-size:12px;padding:5px 8px}
+  .ttsBox .note{font-size:10px;color:#aaa;line-height:1.8;margin-top:8px}
   .status{text-align:center;padding:0.7rem;font-size:13px;color:#666;border-top:1px solid #f0f0f0}
   .status.done{color:#2d7d0f;font-size:15px;font-weight:600}
 
@@ -76,35 +86,207 @@
 const $ = id => document.getElementById(id);
 const GKEY_LS='meow:gemini_key', GMODEL_LS='meow:gemini_model';
 
-/* ── Voice helper ─────────────────────────────────────────── */
-const MALE_PREF = [
-  'Google UK English Male','Microsoft David - English (United States)',
-  'Microsoft Guy Online (Natural) - English (United States)',
-  'Alex','Daniel','Fred','Google US English'
-];
+/* ── 語音引擎 ─────────────────────────────────────────────
+   三層：本機 Kokoro（最自然）→ Gemini TTS（雲端，沿用同一把金鑰）
+   → 瀏覽器內建語音（最後手段）。
+   合成結果以文字內容為鍵快取，重播不會重新合成。
+
+   註：原本用瀏覽器內建語音並設 pitch=0.75、rate=0.82，聽起來機械感重——
+   內建語音本來就沒有語意層級的抑揚頓挫，機械壓低音高只會更像機器人。
+   這裡把 pitch 拿掉，並把慢速交給真正的語音引擎處理。
+─────────────────────────────────────────────────────────── */
+const TTS_CFG_LS = 'meow:tts_cfg';
+const TTS_DEFAULTS = {
+  engine: 'auto',                                   // auto | kokoro | gemini | browser
+  kokoroUrl: 'http://localhost:8880',
+  kokoroVoice: 'af_heart',
+  geminiVoice: 'Kore',
+  ttsModel: 'gemini-2.5-flash-preview-tts',
+  speed: 0.9,
+};
+let ttsCfg = Object.assign({}, TTS_DEFAULTS);
+let lastTtsNote = '';
+function loadTtsCfg(){
+  try{ const raw = localStorage.getItem(TTS_CFG_LS); if(raw) ttsCfg = Object.assign({}, TTS_DEFAULTS, JSON.parse(raw)); }catch(e){}
+  return ttsCfg;
+}
+function saveTtsCfg(patch){
+  ttsCfg = Object.assign({}, ttsCfg, patch);
+  try{ localStorage.setItem(TTS_CFG_LS, JSON.stringify(ttsCfg)); }catch(e){}
+}
+loadTtsCfg();
+
+/* 瀏覽器內建語音：優先挑選 Premium / Enhanced / Neural 這類新一代語音，
+   它們的自然度遠高於系統預設的精簡版語音。 */
 function pickVoice(voices){
-  for(const n of MALE_PREF){ const v=voices.find(v=>v.name===n); if(v) return v; }
-  return voices.find(v=>/male/i.test(v.name)&&v.lang.startsWith('en'))
-    || voices.find(v=>v.lang==='en-US')
-    || voices.find(v=>v.lang.startsWith('en'))
+  const en = voices.filter(v => /^en(-|$)/i.test(v.lang));
+  const better = en.filter(v => /premium|enhanced|natural|neural|siri/i.test(v.name));
+  return better.find(v => v.lang === 'en-US')
+    || better[0]
+    || en.find(v => /^Google (US|UK) English/i.test(v.name))
+    || en.find(v => v.lang === 'en-US')
+    || en[0]
     || null;
 }
-function makeTTS(text){
-  let playing=false, onChange=()=>{};
-  function toggle(){
-    if(!window.speechSynthesis) return;
-    if(playing){ speechSynthesis.cancel(); playing=false; onChange(playing); return; }
-    speechSynthesis.cancel();
-    const utt=new SpeechSynthesisUtterance(text);
-    utt.lang='en-US'; utt.rate=0.82; utt.pitch=0.75; utt.volume=1;
-    utt.onstart=()=>{ playing=true; onChange(playing); };
-    utt.onend=utt.onerror=()=>{ playing=false; onChange(playing); };
-    const go=()=>{ const v=pickVoice(speechSynthesis.getVoices()); if(v) utt.voice=v; speechSynthesis.speak(utt); };
-    const voices=speechSynthesis.getVoices();
-    if(voices.length>0) go();
-    else speechSynthesis.onvoiceschanged=()=>{ speechSynthesis.onvoiceschanged=null; go(); };
+
+/* 已合成音檔的快取：key = 引擎 + 語音 + 語速 + 文字 */
+const ttsCache = new Map();
+const ttsKey = t => [ttsCfg.engine, ttsCfg.kokoroVoice, ttsCfg.geminiVoice, ttsCfg.speed, t].join('|~|');
+
+async function kokoroSynth(text){
+  const base = (ttsCfg.kokoroUrl || TTS_DEFAULTS.kokoroUrl).replace(/\/$/, '');
+  const res = await fetch(base + '/v1/audio/speech', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'kokoro', voice: ttsCfg.kokoroVoice, input: text,
+                           response_format: 'mp3', speed: Number(ttsCfg.speed) || 1 }),
+  });
+  if(!res.ok) throw new Error('Kokoro ' + res.status);
+  const blob = await res.blob();
+  if(blob.size < 1000) throw new Error('Kokoro 回傳的音檔異常小');
+  return blob;
+}
+
+/* Gemini TTS 回傳裸 PCM（base64），要自己補上 WAV 檔頭才能播放。 */
+function pcmToWav(pcm, sampleRate){
+  const buf = new ArrayBuffer(44 + pcm.length), view = new DataView(buf);
+  const str = (off, t) => { for(let i = 0; i < t.length; i++) view.setUint8(off + i, t.charCodeAt(i)); };
+  str(0, 'RIFF'); view.setUint32(4, 36 + pcm.length, true); str(8, 'WAVE');
+  str(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  str(36, 'data'); view.setUint32(40, pcm.length, true);
+  new Uint8Array(buf, 44).set(pcm);
+  return new Blob([buf], { type: 'audio/wav' });
+}
+async function geminiSynth(text){
+  const key = getGeminiKey();
+  if(!key) throw new Error('尚未設定 Gemini 金鑰');
+  // Gemini TTS 沒有數值語速參數，改用自然語言指示語氣與節奏。
+  const pace = Number(ttsCfg.speed) <= 0.85 ? '緩慢清晰地'
+             : Number(ttsCfg.speed) <= 0.95 ? '以稍慢的教學語速' : '以自然語速';
+  const prompt = '請' + pace + '朗讀以下英文短文，語氣自然、像老師唸給學生聽：\n\n' + text;
+  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + ttsCfg.ttsModel + ':generateContent', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: ttsCfg.geminiVoice } } },
+      },
+    }),
+  });
+  if(!res.ok){
+    let msg = 'Gemini TTS ' + res.status;
+    try{ const e = await res.json(); if(e.error && e.error.message) msg = e.error.message; }catch(_){}
+    throw new Error(msg);
   }
-  return { toggle, isPlaying:()=>playing, onChange:f=>{onChange=f;} };
+  const d = await res.json();
+  const parts = (d.candidates && d.candidates[0] && d.candidates[0].content && d.candidates[0].content.parts) || [];
+  const part = parts.find(p => p.inlineData);
+  if(!part) throw new Error('Gemini 沒有回傳音訊（請確認 TTS 模型名稱是否正確）');
+  const bin = atob(part.inlineData.data);
+  const pcm = new Uint8Array(bin.length);
+  for(let i = 0; i < bin.length; i++) pcm[i] = bin.charCodeAt(i);
+  const m = String(part.inlineData.mimeType || '').match(/rate=(\d+)/);
+  return pcmToWav(pcm, m ? Number(m[1]) : 24000);
+}
+
+/* 依設定合成音檔；回傳 null 代表沒有可用的本機／雲端引擎，呼叫端改用瀏覽器語音。 */
+async function synthAudio(text){
+  const k = ttsKey(text);
+  if(ttsCache.has(k)) return ttsCache.get(k);
+  const order = ttsCfg.engine === 'auto' ? ['kokoro', 'gemini']
+              : ttsCfg.engine === 'browser' ? []
+              : [ttsCfg.engine];
+  const errors = [];
+  lastTtsNote = '';
+  for(const eng of order){
+    if(eng === 'gemini' && !getGeminiKey()){ errors.push('Gemini：尚未設定金鑰'); continue; }
+    try{
+      const blob = eng === 'kokoro' ? await kokoroSynth(text) : await geminiSynth(text);
+      const out = { url: URL.createObjectURL(blob), blob, engine: eng };
+      ttsCache.set(k, out);
+      return out;
+    }catch(e){ errors.push((eng === 'kokoro' ? 'Kokoro：' : 'Gemini：') + e.message); }
+  }
+  // 指定了單一引擎卻失敗 → 讓老師看到真正的原因，而不是默默退回機械音
+  if(order.length && ttsCfg.engine !== 'auto') throw new Error(errors.join('　'));
+  if(errors.length) lastTtsNote = errors.join('　');
+  return null;
+}
+
+/* 播放控制：優先播放合成音檔，失敗才退回瀏覽器內建語音。 */
+function makeTTS(text){
+  let playing = false, onChange = () => {}, onStatus = () => {}, audio = null;
+  const setPlaying = v => { playing = v; onChange(playing); };
+
+  function browserSpeak(){
+    if(!window.speechSynthesis){ onStatus('這個瀏覽器不支援語音播放'); setPlaying(false); return; }
+    speechSynthesis.cancel();
+    // 內建語音在長文會被瀏覽器截斷，依句子切段依序播放。
+    const queue = String(text).match(/[^.!?]+[.!?]*\s*/g) || [text];
+    const start = () => {
+      const v = pickVoice(speechSynthesis.getVoices());
+      let i = 0;
+      const next = () => {
+        if(!playing || i >= queue.length){ setPlaying(false); return; }
+        const utt = new SpeechSynthesisUtterance(queue[i++]);
+        utt.lang = 'en-US'; utt.volume = 1;
+        utt.rate = Number(ttsCfg.speed) || 0.9;   // 不調 pitch：機械壓低音高只會更像機器人
+        if(v) utt.voice = v;
+        utt.onend = next;
+        utt.onerror = () => setPlaying(false);
+        speechSynthesis.speak(utt);
+      };
+      setPlaying(true); next();
+    };
+    if(speechSynthesis.getVoices().length) start();
+    else speechSynthesis.onvoiceschanged = () => { speechSynthesis.onvoiceschanged = null; start(); };
+  }
+
+  function stop(){
+    if(audio){ audio.pause(); audio = null; }
+    if(window.speechSynthesis) speechSynthesis.cancel();
+    setPlaying(false);
+  }
+
+  async function toggle(){
+    if(playing){ stop(); return; }
+    stop();
+    let res = null;
+    try{
+      setPlaying(true); onStatus('正在合成語音…');
+      res = await synthAudio(text);
+    }catch(e){
+      setPlaying(false); onStatus('⚠️ ' + e.message); return;
+    }
+    if(!res){
+      onStatus(lastTtsNote ? '使用瀏覽器內建語音（' + lastTtsNote + '）' : '使用瀏覽器內建語音');
+      browserSpeak(); return;
+    }
+    onStatus('語音來源：' + (res.engine === 'kokoro' ? '本機 Kokoro' : 'Gemini TTS'));
+    audio = new Audio(res.url);
+    audio.onended = () => { audio = null; setPlaying(false); };
+    audio.onerror = () => { audio = null; browserSpeak(); };
+    audio.play().catch(() => { audio = null; browserSpeak(); });
+  }
+
+  return {
+    toggle, stop,
+    isPlaying: () => playing,
+    onChange: f => { onChange = f; },
+    onStatus: f => { onStatus = f; },
+    hasAudio: () => ttsCache.has(ttsKey(text)),
+    /* 讓老師把合成好的音檔存下來重複使用（同一份教材下次不必重新合成） */
+    async download(){
+      const res = ttsCache.get(ttsKey(text)) || await synthAudio(text);
+      if(!res) throw new Error('目前使用瀏覽器內建語音，沒有可下載的音檔');
+      const a = document.createElement('a');
+      a.href = res.url;
+      a.download = 'listening-' + Date.now() + (res.engine === 'kokoro' ? '.mp3' : '.wav');
+      document.body.appendChild(a); a.click(); a.remove();
+    },
+  };
 }
 
 /* ── Segment builder ──────────────────────────────────────── */
@@ -185,6 +367,49 @@ function renderSetup(){
           <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite（更快・免費額度高）</option>
         </select>
         <div class="hint">免費申請：到 <a class="keylink" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 登入 Google 帳號 → Create API key，貼上即可。金鑰只存在你自己這台裝置的瀏覽器，不會外傳。</div>
+        <details class="ttsBox" id="ttsBox">
+          <summary>🔊 語音設定（聽起來不夠自然時調這裡）</summary>
+          <div class="row">
+            <label>語音引擎</label>
+            <select class="inp" id="ttsEngine">
+              <option value="auto">自動（本機 Kokoro → Gemini → 瀏覽器）</option>
+              <option value="kokoro">本機 Kokoro（最自然・免費）</option>
+              <option value="gemini">Gemini TTS（雲端・沿用上面的金鑰）</option>
+              <option value="browser">瀏覽器內建語音（最陽春）</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>語速</label>
+            <select class="inp" id="ttsSpeed">
+              <option value="0.8">0.8×（初學者）</option>
+              <option value="0.9">0.9×（教學語速）</option>
+              <option value="1">1×（自然語速）</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>Kokoro 位址</label>
+            <input class="inp" id="ttsKokoroUrl" placeholder="http://localhost:8880" />
+          </div>
+          <div class="row">
+            <label>Kokoro 語音</label>
+            <input class="inp" id="ttsKokoroVoice" placeholder="af_heart" />
+          </div>
+          <div class="row">
+            <label>Gemini 語音</label>
+            <input class="inp" id="ttsGeminiVoice" placeholder="Kore" />
+          </div>
+          <div class="row">
+            <label>Gemini TTS 模型</label>
+            <input class="inp" id="ttsModel" placeholder="gemini-2.5-flash-preview-tts" />
+          </div>
+          <div class="note">
+            <b>本機 Kokoro（推薦）</b>：先在終端機執行<br/>
+            <code>cd ~/github/Kokoro-FastAPI &amp;&amp; ./start-gpu_mac.sh</code><br/>
+            啟動後這裡會自動使用它，免費且不必連網。用完記得關掉。<br/>
+            <b>Gemini TTS</b>：不必啟動任何東西，但會消耗上面那把金鑰的額度。<br/>
+            學生自己在手機上玩時，通常只會有瀏覽器內建語音——建議先在這裡合成好、按「⬇ 存音檔」下載給學生。
+          </div>
+        </details>
       </div>
       <div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -214,6 +439,21 @@ function renderSetup(){
   }catch(e){}
   $('geminiKey').addEventListener('change',()=>{ try{localStorage.setItem(GKEY_LS,getGeminiKey());}catch(e){} });
   $('geminiModel').addEventListener('change',()=>{ try{localStorage.setItem(GMODEL_LS,getGeminiModel());}catch(e){} });
+
+  // 語音設定：載入目前值，任何變動立即存回 localStorage
+  const ttsFields = {
+    ttsEngine:'engine', ttsSpeed:'speed', ttsKokoroUrl:'kokoroUrl',
+    ttsKokoroVoice:'kokoroVoice', ttsGeminiVoice:'geminiVoice', ttsModel:'ttsModel',
+  };
+  for(const [id,key] of Object.entries(ttsFields)){
+    const el=$(id); if(!el) continue;
+    el.value = ttsCfg[key];
+    el.addEventListener('change',()=>{
+      const v = key==='speed' ? Number(el.value) : el.value.trim() || TTS_DEFAULTS[key];
+      if(key!=='speed') el.value = v;
+      saveTtsCfg({ [key]: v });
+    });
+  }
 
   $('gArticle').addEventListener('input',()=>{
     const n=$('gArticle').value.trim();
@@ -298,6 +538,7 @@ function renderGame(){
       <div><div class="eyebrow">聽力更正遊戲</div><div class="gtitle">${escapeHtml(game.title||'聽力遊戲')}</div></div>
       <div class="ghead-btns">
         <button class="ttsBtn" id="ttsBtn">▶ 播放全文</button>
+        <button class="ttsBtn" id="dlBtn" title="將合成好的音檔存檔，下次不必重新合成">⬇ 存音檔</button>
         <button class="backBtn" id="backBtn">← 重新設定</button>
       </div>
     </div>
@@ -309,11 +550,18 @@ function renderGame(){
         <div class="tip">① 播放音檔仔細聆聽<br/>② 找出文章中<br/>　與音檔不同的字<br/>③ 選正確字拖到<br/>　錯誤字上更正</div>
       </div>
     </div>
+    <div class="ttsNote" id="ttsNote"></div>
     <div class="status" id="statusBox"></div>
   `;
 
-  $('backBtn').addEventListener('click',()=>{ if(tts.isPlaying()) tts.toggle(); game=null; renderSetup(); });
-  $('ttsBtn').addEventListener('click',()=>tts.toggle());
+  $('backBtn').addEventListener('click',()=>{ tts.stop(); game=null; renderSetup(); });
+  $('ttsBtn').addEventListener('click',()=>{ tts.toggle(); });
+  $('dlBtn').addEventListener('click',async()=>{
+    $('ttsNote').textContent='正在準備音檔…';
+    try{ await tts.download(); $('ttsNote').textContent='音檔已下載'; }
+    catch(e){ $('ttsNote').textContent='⚠️ '+e.message; }
+  });
+  tts.onStatus(msg=>{ $('ttsNote').textContent = msg || ''; });
   tts.onChange(playing=>{
     const b=$('ttsBtn');
     b.classList.toggle('on',playing);
